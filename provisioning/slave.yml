@@ -1,0 +1,108 @@
+---
+- hosts: all
+  sudo: True
+  tasks:
+
+  - copy: content="DOCKER_NETWORK_OPTIONS=--log-driver=journald" dest=/etc/sysconfig/docker-network
+  - name: Make sure docker is running
+    service: >
+      name=docker
+      state=restarted
+      enabled=true
+
+  - name: create mesos directory
+    file: >
+      path=/var/data/mesos
+      owner=root
+      group=root
+      mode=0755
+      state=directory
+    tags:
+      - mounts
+
+  - name: clean up stale mounts
+    command: umount -f /sysroot/tmp/mesos
+    ignore_errors: yes
+    tags:
+      - mounts
+
+  - name: Bind-mount mesos sandbox
+    mount: >
+      opts=bind
+      fstype=none
+      state=mounted
+      name=/sysroot/tmp/mesos
+      src=/var/data/mesos
+    tags:
+      - mounts
+      - slave-container
+
+  # Docker issue 18528
+  - name: create consul directory
+    file: >
+      path=/var/data/consul
+      owner=root
+      group=root
+      mode=0755
+      state=directory
+    tags:
+      - issue-18528
+
+  - name: slave container
+    docker:
+      name: "mesos-slave"
+      image: "mesoscloud/mesos-slave:{{mesos_version}}"
+      state: started
+      net: host
+      privileged: true
+      pid: host
+      env:
+        LIBPROCESS_ADVERTISE_IP: "{{ipaddr}}"
+        MESOS_CLUSTER: "local"
+        MESOS_CONTAINERIZERS: docker
+        MESOS_DOCKER_STOP_TIMEOUT: 50secs
+        MESOS_EXECUTOR_REGISTRATION_TIMEOUT: 5mins
+        MESOS_EXECUTOR_SHUTDOWN_GRACE_PERIOD: 60secs
+        MESOS_HOSTNAME: "{{ ipaddr }}"
+        MESOS_IP: "{{ ipaddr }}"
+        MESOS_ISOLATOR: cgroups/cpu,cgroups/mem
+        MESOS_LOGGING_LEVEL: WARNING
+        MESOS_MASTER: "zk://{{master_addr}}:2181/mesos"
+        MESOS_PORT: 5051
+        MESOS_RESOURCES: "ports(*):[31000-32000];mem:15000"
+        SECRET: "{{ mesos_secret }}"
+        LIBPROCESS_IP: "{{ ipaddr }}"
+      volumes:
+      - "/sys:/sys:ro"
+      - "/sys/fs/cgroup:/sys/fs/cgroup"
+      - "/var/run/docker.sock:/var/run/docker.sock"
+      - "/var/data/mesos:/tmp/mesos"
+      ports:
+      - "5051:5051"
+    tags:
+      - slave-container
+
+  - name: consul container
+    docker:
+      name: consul
+      image: progrium/consul
+      state: present
+      net: host
+      privileged: true
+      command: -server -bootstrap-expect 1 -advertise "{{ipaddr}}" -recursor 8.8.8.8 -join "{{master_addr}}"
+      volumes:
+      - "/var/data/consul:/data:Z"
+    tags:
+      - consul-container
+
+  - name: install service files
+    template: src="service.j2" dest="/etc/systemd/system/{{item}}.service"
+    with_items:
+    - mesos-slave
+    - consul
+
+  - name: start services
+    service: name={{item}} state=started enabled=yes
+    with_items:
+    - mesos-slave
+    - consul
