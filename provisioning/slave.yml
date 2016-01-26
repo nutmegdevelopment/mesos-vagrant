@@ -20,11 +20,6 @@
     tags:
       - mounts
 
-  - name: clean up stale mounts
-    command: umount -f /sysroot/tmp/mesos
-    ignore_errors: yes
-    tags:
-      - mounts
 
   - name: Bind-mount mesos sandbox
     mount: >
@@ -51,11 +46,12 @@
   - name: slave container
     docker:
       name: "mesos-slave"
-      image: "mesoscloud/mesos-slave:{{mesos_version}}"
+      image: "registry.nutmeg.co.uk:8443/mesos:{{mesos_version}}"
       state: started
       net: host
       privileged: true
       pid: host
+      command: /usr/sbin/mesos-slave
       env:
         LIBPROCESS_ADVERTISE_IP: "{{ipaddr}}"
         MESOS_CLUSTER: "local"
@@ -88,7 +84,7 @@
       state: present
       net: host
       privileged: true
-      command: -server -bootstrap-expect 1 -advertise "{{ipaddr}}" -recursor 8.8.8.8 -join "{{master_addr}}"
+      command: -advertise "{{ipaddr}}" -join "{{master_addr}}" -node "{{node_name}}"
       volumes:
       - "/var/data/consul:/data:Z"
     tags:

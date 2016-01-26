@@ -3,6 +3,9 @@
   sudo: True
   tasks:
 
+  - name: configure hosts file
+    template: src="hosts.j2" dest=/etc/hosts
+
   - copy: content="DOCKER_NETWORK_OPTIONS=--log-driver=journald" dest=/etc/sysconfig/docker-network
   - name: Make sure docker is running
     service: >
@@ -78,9 +81,10 @@
   - name: master container
     docker:
       name: "mesos-master"
-      image: "mesoscloud/mesos-master:{{mesos_version}}"
+      image: "registry.nutmeg.co.uk:8443/mesos:{{mesos_version}}"
       state: present
       net: host
+      command: /usr/sbin/mesos-master
       env:
         MESOS_AUTHENTICATE_SLAVES: true
         MESOS_HOSTNAME: "{{ ipaddr }}"
@@ -97,43 +101,10 @@
     tags:
       - master-container
 
-  - name: slave container
-    docker:
-      name: "mesos-slave"
-      image: "mesoscloud/mesos-slave:{{mesos_version}}"
-      state: started
-      net: host
-      privileged: true
-      pid: host
-      env:
-        LIBPROCESS_ADVERTISE_IP: "{{ipaddr}}"
-        MESOS_CLUSTER: "local"
-        MESOS_CONTAINERIZERS: docker
-        MESOS_DOCKER_STOP_TIMEOUT: 50secs
-        MESOS_EXECUTOR_REGISTRATION_TIMEOUT: 5mins
-        MESOS_EXECUTOR_SHUTDOWN_GRACE_PERIOD: 60secs
-        MESOS_HOSTNAME: "{{ ipaddr }}"
-        MESOS_IP: "{{ ipaddr }}"
-        MESOS_ISOLATOR: cgroups/cpu,cgroups/mem
-        MESOS_LOGGING_LEVEL: INFO
-        MESOS_MASTER: "zk://{{ipaddr}}:2181/mesos"
-        MESOS_PORT: 5051
-        SECRET: "{{ mesos_secret }}"
-        LIBPROCESS_IP: "{{ ipaddr }}"
-      volumes:
-      - "/sys:/sys:ro"
-      - "/sys/fs/cgroup:/sys/fs/cgroup"
-      - "/var/run/docker.sock:/var/run/docker.sock"
-      - "/var/data/mesos:/tmp/mesos"
-      ports:
-      - "5051:5051"
-    tags:
-      - slave-container
-
   - name: marathon container
     docker:
       name: marathon
-      image: mesoscloud/marathon:{{marathon_version}}
+      image: mesosphere/marathon:{{marathon_version}}
       state: present
       net: host
       env:
@@ -156,32 +127,16 @@
       state: present
       net: host
       privileged: true
-      command: -server -bootstrap-expect 1 -advertise "{{ipaddr}}" -recursor 8.8.8.8
+      command: -server -bootstrap-expect 1 -advertise "{{ipaddr}}" -recursor 8.8.8.8 -node "{{node_name}}"
       volumes:
       - "/var/data/consul:/data:Z"
     tags:
       - consul-container
 
-  # - name: chronos container
-  #   docker:
-  #     name: chronos
-  #     image: "mesoscloud/chronos:{{chronos_version}}"
-  #     state: present
-  #     net: host
-  #     env:
-  #       CHRONOS_HTTP_PORT: 8081
-  #       CHRONOS_MASTER: "zk://{{ipaddr}}:2181/mesos"
-  #       CHRONOS_ZK_HOSTS: "{{ipaddr}}:2181"
-        # SECRET: "{{ mesos_secret }}"
-  #       LIBPROCESS_IP: "{{ ipaddr }}"
-  #   tags:
-  #     - chronos-container
-
   - name: install service files
     template: src="service.j2" dest="/etc/systemd/system/{{item}}.service"
     with_items:
     - mesos-master
-    - mesos-slave
     - zookeeper
     - marathon
     - consul
@@ -190,7 +145,6 @@
     service: name={{item}} state=started enabled=yes
     with_items:
     - mesos-master
-    - mesos-slave
     - zookeeper
     - marathon
     - consul
